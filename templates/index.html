@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoMotion Tools - Web Admin Panel Scanner</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #0a0a0f; color: #e0e0e0; font-family: 'Segoe UI', monospace; }
+        .terminal { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+        .terminal-header { color: #58a6ff; font-weight: bold; border-bottom: 1px solid #30363d; padding-bottom: 10px; margin-bottom: 15px; }
+        .output-line { font-family: 'Courier New', monospace; font-size: 14px; margin: 4px 0; padding: 2px 8px; }
+        .output-success { color: #3fb950; }
+        .output-error { color: #f85149; }
+        .output-info { color: #79c0ff; }
+        .output-warn { color: #d29922; }
+        .card-custom { background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+        .btn-scan { background: #238636; border: none; color: white; font-weight: bold; }
+        .btn-scan:hover { background: #2ea043; }
+        .badge-admin { background: #1f6feb; }
+        .badge-cred { background: #238636; }
+        .badge-sqli { background: #9e6a03; }
+        .spinner { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .result-item { margin: 5px 0; padding: 8px 12px; border-radius: 6px; }
+        .result-item:hover { background: #1c2128; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-10 offset-md-1">
+                <!-- Header -->
+                <div class="text-center mb-4">
+                    <h1 class="display-6" style="color: #58a6ff;">⚡ AutoMotion Tools</h1>
+                    <p class="text-muted">Web Admin Panel Discovery & Authentication Testing Suite</p>
+                    <p class="text-muted small">For authorized penetration testing only</p>
+                </div>
+
+                <!-- Target Input -->
+                <div class="card card-custom mb-4">
+                    <div class="card-body">
+                        <div class="input-group mb-3">
+                            <span class="input-group-text" style="background: #21262d; border: 1px solid #30363d; color: #8b949e;">https://</span>
+                            <input type="text" id="targetInput" class="form-control" 
+                                   style="background: #0d1117; border: 1px solid #30363d; color: #e0e0e0;"
+                                   placeholder="example.com" 
+                                   value="testphp.vulnweb.com">
+                            <button id="scanBtn" class="btn btn-scan" onclick="startScan()">
+                                ▶ Start Scan
+                            </button>
+                        </div>
+                        <div class="row text-center text-muted small">
+                            <div class="col">🔍 Admin Panel Discovery</div>
+                            <div class="col">🔑 Credential Testing</div>
+                            <div class="col">💉 SQLi Bypass</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div id="progressSection" class="mb-4" style="display:none;">
+                    <div class="progress" style="height: 25px; background: #0d1117; border: 1px solid #30363d;">
+                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                             style="width: 0%; background: #238636;" role="progressbar">
+                            0%
+                        </div>
+                    </div>
+                    <div id="statusMessage" class="text-center mt-2 text-muted small">Initializing...</div>
+                </div>
+
+                <!-- Terminal Output -->
+                <div class="terminal mb-4">
+                    <div class="terminal-header">
+                        <span>$</span> scan_output — <span id="targetDisplay">No target</span>
+                        <span class="badge bg-secondary float-end" id="liveBadge" style="display:none;">LIVE</span>
+                    </div>
+                    <div id="output" style="min-height: 300px; max-height: 500px; overflow-y: auto;">
+                        <div class="output-line output-info">[System] Ready to scan. Enter a target URL and click Start.</div>
+                    </div>
+                </div>
+
+                <!-- Results Summary -->
+                <div id="resultsSummary" class="row mb-4" style="display:none;">
+                    <div class="col-md-4">
+                        <div class="card card-custom text-center p-3">
+                            <div class="text-info h4" id="panelCount">0</div>
+                            <div class="text-muted small">Admin Panels Found</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card card-custom text-center p-3">
+                            <div class="text-success h4" id="credCount">0</div>
+                            <div class="text-muted small">Credentials Found</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card card-custom text-center p-3">
+                            <div class="text-warning h4" id="sqliCount">0</div>
+                            <div class="text-muted small">SQLi Bypasses</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Results -->
+                <div id="detailedResults" class="card card-custom mb-4" style="display:none;">
+                    <div class="card-header" style="background: #21262d; border-bottom: 1px solid #30363d;">
+                        <h5 class="mb-0" style="color: #58a6ff;">📋 Detailed Results</h5>
+                    </div>
+                    <div class="card-body" id="resultDetails">
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div class="text-center text-muted small mt-4 mb-4">
+                    <p>⚠️ This tool is for authorized security testing only.</p>
+                    <p>Built with ❤️ for the pentesting community</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentScanId = null;
+        let pollInterval = null;
+
+        function appendOutput(text, type = 'info') {
+            const output = document.getElementById('output');
+            const line = document.createElement('div');
+            line.className = `output-line output-${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            line.textContent = `[${timestamp}] ${text}`;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function startScan() {
+            const target = document.getElementById('targetInput').value.trim();
+            if (!target) {
+                appendOutput('Please enter a target URL', 'error');
+                return;
+            }
+
+            document.getElementById('scanBtn').disabled = true;
+            document.getElementById('scanBtn').innerHTML = '<span class="spinner">⟳</span> Scanning...';
+            document.getElementById('targetDisplay').textContent = target;
+            document.getElementById('output').innerHTML = '';
+            document.getElementById('progressSection').style.display = 'block';
+            document.getElementById('liveBadge').style.display = 'inline';
+            document.getElementById('resultsSummary').style.display = 'none';
+            document.getElementById('detailedResults').style.display = 'none';
+
+            appendOutput(`Starting scan on ${target}`, 'info');
+            appendOutput('Checking authorization...', 'info');
+
+            fetch('/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ target: target })
+            })
+            .then(r => r.json())
+            .then(data => {
+                currentScanId = data.scan_id;
+                appendOutput(`Scan started with ID: ${currentScanId}`, 'info');
+                pollInterval = setInterval(() => pollStatus(currentScanId), 1000);
+            })
+            .catch(err => {
+                appendOutput(`Error: ${err.message}`, 'error');
+                resetButton();
+            });
+        }
+
+        function pollStatus(scanId) {
+            fetch(`/status/${scanId}`)
+            .then(r => r.json())
+            .then(data => {
+                const progress = data.progress || 0;
+                document.getElementById('progressBar').style.width = progress + '%';
+                document.getElementById('progressBar').textContent = Math.round(progress) + '%';
+                
+                if (data.message) {
+                    document.getElementById('statusMessage').textContent = data.message;
+                }
+
+                if (data.status === 'complete') {
+                    clearInterval(pollInterval);
+                    appendOutput('Scan complete! Fetching results...', 'success');
+                    fetchResults(scanId);
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    appendOutput(`Error: ${data.message}`, 'error');
+                    resetButton();
+                }
+            });
+        }
+
+        function fetchResults(scanId) {
+            fetch(`/results/${scanId}`)
+            .then(r => r.json())
+            .then(data => {
+                displayResults(data);
+                resetButton();
+                document.getElementById('liveBadge').style.display = 'none';
+            });
+        }
+
+        function displayResults(data) {
+            let panelCount = 0, credCount = 0, sqliCount = 0;
+            
+            // Process each step
+            for (const step of data.steps || []) {
+                if (step.name === 'Admin Panel Discovery') {
+                    panelCount = step.found || 0;
+                    for (const panel of step.results || []) {
+                        appendOutput(`[ADMIN] ${panel.url} (${panel.status}) [${panel.title}]`, 'success');
+                    }
+                }
+                else if (step.name === 'Login Form Detected') {
+                    const f = step.form;
+                    appendOutput(`[FORM] ${f.action} | Fields: ${Object.keys(f.fields).join(', ')}`, 'warn');
+                }
+                else if (step.name === 'Credentials Found') {
+                    for (const cred of step.results || []) {
+                        credCount++;
+                        appendOutput(`[CRED] ${cred.username}:${cred.password} [${cred.status}]`, 'success');
+                    }
+                }
+                else if (step.name === 'SQLi Bypass Found') {
+                    for (const bypass of step.results || []) {
+                        sqliCount++;
+                        const payload = bypass.payload || {};
+                        appendOutput(`[SQLi] user='${payload.username}' pass='${payload.password}'`, 'warn');
+                    }
+                }
+            }
+
+            // Update summary
+            document.getElementById('panelCount').textContent = panelCount;
+            document.getElementById('credCount').textContent = credCount;
+            document.getElementById('sqliCount').textContent = sqliCount;
+            document.getElementById('resultsSummary').style.display = 'flex';
+            
+            if (panelCount === 0 && credCount === 0 && sqliCount === 0) {
+                appendOutput('No vulnerabilities or admin panels found.', 'info');
+            }
+            
+            appendOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+            appendOutput(`Summary: ${panelCount} panels, ${credCount} creds, ${sqliCount} SQLi bypasses`, 'info');
+        }
+
+        function resetButton() {
+            document.getElementById('scanBtn').disabled = false;
+            document.getElementById('scanBtn').innerHTML = '▶ Start Scan';
+        }
+    </script>
+</body>
+</html>
