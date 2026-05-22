@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-AutoMotionTools - Flask Web Interface (Render Optimized)
+AutoMotionTools - Flask Web Interface (Render Fixed)
 """
 
-from flask import Flask, render_template, request, jsonify
-import threading
+# ========== প্রথমে সব import ==========
 import os
+import threading
+import time
 import warnings
-warnings.filterwarnings('ignore', category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
-# 👇 এই লাইন scanner.py ইমপোর্ট করার আগে বসাতে হবে
-import requests
-from urllib3.exceptions import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+# Suppress SSL warnings (scanner এ verify=False ব্যবহার করি)
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore")
 
+from flask import Flask, render_template, request, jsonify
 from scanner import AutoMotionScanner
 
+# ========== Flask App ==========
 app = Flask(__name__)
 
 scan_results = {}
@@ -27,7 +29,7 @@ def index():
 
 @app.route('/scan', methods=['POST'])
 def start_scan():
-    """Start a new scan."""
+    """Start a new scan in background thread."""
     data = request.get_json()
     target = data.get('target', '').strip()
     
@@ -37,7 +39,6 @@ def start_scan():
     if not target.startswith(('http://', 'https://')):
         target = 'https://' + target
     
-    import time
     scan_id = str(int(time.time()))
     scan_status[scan_id] = {"status": "running", "progress": 0, "message": "Initializing..."}
     
@@ -45,9 +46,7 @@ def start_scan():
         try:
             scanner = AutoMotionScanner(target)
             scan_status[scan_id] = {"status": "running", "progress": 10, "message": "Discovering admin panels..."}
-            
             results = scanner.full_scan()
-            
             scan_results[scan_id] = results
             scan_status[scan_id] = {"status": "complete", "progress": 100, "message": "Scan complete"}
         except Exception as e:
@@ -71,6 +70,5 @@ def get_results(scan_id):
     return jsonify(results)
 
 if __name__ == '__main__':
-    # 👇 Render-এর PORT env variable ব্যবহার করুন
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
